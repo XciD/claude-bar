@@ -1,4 +1,4 @@
-# Claude Usage Bar
+# Claude Bar 🍸
 
 A lightweight macOS menu bar app that monitors your Claude API usage in real-time.
 
