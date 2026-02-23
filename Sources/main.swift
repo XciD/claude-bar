@@ -263,6 +263,7 @@ class PopoverViewController: NSViewController {
     private let detail5h = NSTextField(labelWithString: "--")
     private let detail7d = NSTextField(labelWithString: "--")
     private let extraLabel = NSTextField(labelWithString: "")
+    private var loginCheckbox: NSButton?
     var onRefresh: (() -> Void)?
     var onQuit: (() -> Void)?
 
@@ -304,6 +305,13 @@ class PopoverViewController: NSViewController {
         extraLabel.textColor = .secondaryLabelColor
         extraLabel.alignment = .center
 
+        let loginBtn = NSButton(checkboxWithTitle: "Launch at Login", target: self, action: #selector(toggleLogin))
+        loginBtn.controlSize = .small
+        if #available(macOS 13.0, *) {
+            loginBtn.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        }
+        self.loginCheckbox = loginBtn
+
         let refreshBtn = NSButton(title: "Refresh", target: self, action: #selector(refreshTapped))
         refreshBtn.bezelStyle = .rounded; refreshBtn.controlSize = .small
         let quitBtn = NSButton(title: "Quit", target: self, action: #selector(quitTapped))
@@ -312,7 +320,7 @@ class PopoverViewController: NSViewController {
         let btnRow = NSStackView(views: [refreshBtn, quitBtn])
         btnRow.orientation = .horizontal; btnRow.spacing = 8
 
-        let mainStack = NSStackView(views: [topRow, sep, extraLabel, btnRow])
+        let mainStack = NSStackView(views: [topRow, sep, extraLabel, loginBtn, btnRow])
         mainStack.orientation = .vertical; mainStack.spacing = 10; mainStack.alignment = .centerX
         mainStack.translatesAutoresizingMaskIntoConstraints = false
 
@@ -362,6 +370,15 @@ class PopoverViewController: NSViewController {
 
     @objc private func refreshTapped() { onRefresh?() }
     @objc private func quitTapped() { onQuit?() }
+    @available(macOS 13.0, *)
+    @objc private func toggleLogin() {
+        if SMAppService.mainApp.status == .enabled {
+            try? SMAppService.mainApp.unregister()
+        } else {
+            try? SMAppService.mainApp.register()
+        }
+        loginCheckbox?.state = SMAppService.mainApp.status == .enabled ? .on : .off
+    }
 }
 
 // MARK: - App Delegate
