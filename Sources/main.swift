@@ -387,6 +387,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
     private var usage: UsageData?
+    private var eventMonitor: Any?
 
     private lazy var popoverVC: PopoverViewController = {
         let vc = PopoverViewController()
@@ -416,10 +417,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func togglePopover(_ sender: NSStatusBarButton) {
         if popover.isShown {
-            popover.performClose(sender)
+            closePopover()
         } else {
             popoverVC.update(usage: usage)
             popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+            eventMonitor = NSEvent.addGlobalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown]
+            ) { [weak self] _ in
+                self?.closePopover()
+            }
+        }
+    }
+
+    private func closePopover() {
+        popover.performClose(nil)
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+            eventMonitor = nil
         }
     }
 
