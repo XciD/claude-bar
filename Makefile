@@ -7,8 +7,10 @@ BINARY = $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 
 all: $(APP_BUNDLE)
 
-$(APP_BUNDLE): $(BINARY) Info.plist
+$(APP_BUNDLE): $(BINARY) Info.plist AppIcon.icns
 	@cp Info.plist $(APP_BUNDLE)/Contents/
+	@mkdir -p $(APP_BUNDLE)/Contents/Resources
+	@cp AppIcon.icns $(APP_BUNDLE)/Contents/Resources/
 	@echo "Built $(APP_BUNDLE)"
 
 $(BINARY): Sources/main.swift

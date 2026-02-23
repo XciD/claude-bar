@@ -1,2 +1,5 @@
 build/
 .DS_Store
+icon.iconset/
+icon_1024.png
+gen_icon
