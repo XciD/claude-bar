@@ -93,8 +93,10 @@ func fetchUsageData(token: String) async -> UsageData? {
     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
 
-    guard let (data, _) = try? await URLSession.shared.data(for: request),
-          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+    guard let (data, response) = try? await URLSession.shared.data(for: request),
+          let http = response as? HTTPURLResponse, http.statusCode == 200,
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          json["five_hour"] != nil else {
         return nil
     }
 
