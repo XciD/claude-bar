@@ -126,7 +126,7 @@ func fetchUsageData(token: String) async -> UsageData? {
 // MARK: - Drawing Helpers
 
 func drawTrackInCtx(_ ctx: CGContext, cx: CGFloat, cy: CGFloat, r: CGFloat, sw: CGFloat, full: Bool) {
-    let color: NSColor = full ? .systemRed.withAlphaComponent(0.3) : .gray.withAlphaComponent(0.2)
+    let color: NSColor = full ? .systemRed : .gray.withAlphaComponent(0.2)
     ctx.setLineWidth(sw)
     ctx.setLineCap(.round)
     ctx.setStrokeColor(color.cgColor)
@@ -193,22 +193,33 @@ func drawCenterLabel(cx: CGFloat, cy: CGFloat, text: String, fontSize: CGFloat, 
 
 // MARK: - Menu Bar Icon
 
-func renderMenuBarIcon(usage: UsageData?) -> NSImage {
+func renderMenuBarIcon(usage: UsageData?, extraDelta: Double = 0) -> NSImage {
     let h: CGFloat = 24
     let r: CGFloat = 10.0
     let sw: CGFloat = 3.5
     let gap: CGFloat = 4
     let circleW = (r + sw / 2) * 2
-    let w = circleW * 2 + gap
+
+    let full5h = (usage?.fiveHourPct ?? 0) >= 100
+    let full7d = (usage?.sevenDayPct ?? 0) >= 100
+    let anyFull = full5h || full7d
+
+    var extraLabelW: CGFloat = 0
+    var extraText = ""
+    if anyFull {
+        extraText = "+$\(String(format: "%.2f", extraDelta / 100))"
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .semibold)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font]
+        extraLabelW = (extraText as NSString).size(withAttributes: attrs).width + 4
+    }
+
+    let w = circleW * 2 + gap + extraLabelW
     let cx1 = r + sw / 2
-    let cx2 = w - r - sw / 2
+    let cx2 = circleW + gap + r + sw / 2
     let cy = h / 2
 
     let image = NSImage(size: NSSize(width: w, height: h), flipped: true) { _ in
         guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
-
-        let full5h = (usage?.fiveHourPct ?? 0) >= 100
-        let full7d = (usage?.sevenDayPct ?? 0) >= 100
 
         drawTrackInCtx(ctx, cx: cx1, cy: cy, r: r, sw: sw, full: full5h)
         drawTrackInCtx(ctx, cx: cx2, cy: cy, r: r, sw: sw, full: full7d)
@@ -223,10 +234,23 @@ func renderMenuBarIcon(usage: UsageData?) -> NSImage {
         drawRingInCtx(ctx, cx: cx1, cy: cy, r: r, sw: sw, pct: u.fiveHourPct, elapsed: e5h, drift: d5h)
         drawRingInCtx(ctx, cx: cx2, cy: cy, r: r, sw: sw, pct: u.sevenDayPct, elapsed: e7d, drift: d7d)
 
-        let lbl5h = full5h ? "$\(Int(u.extraUsageCents / 100))" : "\(Int(u.fiveHourPct.rounded()))"
-        let lbl7d = full7d ? "$\(Int(u.extraUsageCents / 100))" : "\(Int(u.sevenDayPct.rounded()))"
-        drawCenterLabel(cx: cx1, cy: cy, text: lbl5h, fontSize: 8.5, color: labelColor(pct: u.fiveHourPct, drift: d5h, full: full5h))
-        drawCenterLabel(cx: cx2, cy: cy, text: lbl7d, fontSize: 8.5, color: labelColor(pct: u.sevenDayPct, drift: d7d, full: full7d))
+        if !full5h {
+            let lbl5h = "\(Int(u.fiveHourPct.rounded()))"
+            drawCenterLabel(cx: cx1, cy: cy, text: lbl5h, fontSize: 8.5, color: labelColor(pct: u.fiveHourPct, drift: d5h, full: false))
+        }
+        if !full7d {
+            let lbl7d = "\(Int(u.sevenDayPct.rounded()))"
+            drawCenterLabel(cx: cx2, cy: cy, text: lbl7d, fontSize: 8.5, color: labelColor(pct: u.sevenDayPct, drift: d7d, full: false))
+        }
+
+        if anyFull {
+            let font = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .semibold)
+            let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.systemRed]
+            let textSize = (extraText as NSString).size(withAttributes: attrs)
+            let x = circleW * 2 + gap + 2
+            let textRect = NSRect(x: x, y: cy - textSize.height / 2, width: textSize.width, height: textSize.height)
+            (extraText as NSString).draw(in: textRect, withAttributes: attrs)
+        }
 
         return true
     }
@@ -236,7 +260,7 @@ func renderMenuBarIcon(usage: UsageData?) -> NSImage {
 
 // MARK: - Popover Gauge
 
-func renderPopoverGauge(pct: Double, elapsed: Double?, drift: Double?, full: Bool, extraCents: Double) -> NSImage {
+func renderPopoverGauge(pct: Double, elapsed: Double?, drift: Double?, full: Bool) -> NSImage {
     let size: CGFloat = 64
     let r: CGFloat = 25
     let sw: CGFloat = 6
@@ -247,8 +271,10 @@ func renderPopoverGauge(pct: Double, elapsed: Double?, drift: Double?, full: Boo
         guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
         drawTrackInCtx(ctx, cx: cx, cy: cy, r: r, sw: sw, full: full)
         drawRingInCtx(ctx, cx: cx, cy: cy, r: r, sw: sw, pct: pct, elapsed: elapsed, drift: drift)
-        let label = full ? "$\(Int(extraCents / 100))" : "\(Int(pct.rounded()))"
-        drawCenterLabel(cx: cx, cy: cy, text: label, fontSize: full ? 14 : 18, color: labelColor(pct: pct, drift: drift, full: full))
+        if !full {
+            let label = "\(Int(pct.rounded()))"
+            drawCenterLabel(cx: cx, cy: cy, text: label, fontSize: 18, color: labelColor(pct: pct, drift: drift, full: false))
+        }
         return true
     }
     image.isTemplate = false
@@ -336,7 +362,7 @@ class PopoverViewController: NSViewController {
         self.view = root
     }
 
-    func update(usage: UsageData?) {
+    func update(usage: UsageData?, extraRate: Double? = nil) {
         let e5h = usage.flatMap { elapsedPct(resetsAt: $0.resetsAt, windowHours: 5) }
         let e7d = usage.flatMap { elapsedPct(resetsAt: $0.sevenDayResetsAt, windowHours: 168) }
         let d5h = usage.flatMap { driftPct(usage: $0.fiveHourPct, resetsAt: $0.resetsAt, windowHours: 5) }
@@ -344,9 +370,9 @@ class PopoverViewController: NSViewController {
 
         let extra = usage?.extraUsageCents ?? 0
         gauge5hView.image = renderPopoverGauge(
-            pct: usage?.fiveHourPct ?? 0, elapsed: e5h, drift: d5h, full: (usage?.fiveHourPct ?? 0) >= 100, extraCents: extra)
+            pct: usage?.fiveHourPct ?? 0, elapsed: e5h, drift: d5h, full: (usage?.fiveHourPct ?? 0) >= 100)
         gauge7dView.image = renderPopoverGauge(
-            pct: usage?.sevenDayPct ?? 0, elapsed: e7d, drift: d7d, full: (usage?.sevenDayPct ?? 0) >= 100, extraCents: extra)
+            pct: usage?.sevenDayPct ?? 0, elapsed: e7d, drift: d7d, full: (usage?.sevenDayPct ?? 0) >= 100)
 
         if let d = d5h, let u = usage {
             let reset = u.resetsAt.map { formatRelativeTime($0) } ?? "--"
@@ -365,7 +391,11 @@ class PopoverViewController: NSViewController {
             detail7d.textColor = .secondaryLabelColor
         }
 
-        extraLabel.stringValue = "extra  \(String(format: "$%.2f", (usage?.extraUsageCents ?? 0) / 100))"
+        var extraStr = "extra  \(String(format: "$%.2f", extra / 100))"
+        if let rate = extraRate, rate > 0 {
+            extraStr += "  (\(String(format: "$%.2f", rate / 100))/h)"
+        }
+        extraLabel.stringValue = extraStr
     }
 
     @objc private func refreshTapped() { onRefresh?() }
@@ -388,6 +418,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var timer: Timer?
     private var usage: UsageData?
     private var eventMonitor: Any?
+    private var extraTrackStart: (date: Date, cents: Double)?
+
+    private var currentExtraRate: Double? {
+        guard let u = usage, u.extraUsageCents > 0, let start = extraTrackStart else { return nil }
+        let hours = Date().timeIntervalSince(start.date) / 3600
+        guard hours > 0 else { return nil }
+        return (u.extraUsageCents - start.cents) / hours
+    }
 
     private lazy var popoverVC: PopoverViewController = {
         let vc = PopoverViewController()
@@ -419,7 +457,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if popover.isShown {
             closePopover()
         } else {
-            popoverVC.update(usage: usage)
+            popoverVC.update(usage: usage, extraRate: currentExtraRate)
             popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
             eventMonitor = NSEvent.addGlobalMonitorForEvents(
                 matching: [.leftMouseDown, .rightMouseDown]
@@ -443,8 +481,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let data = await fetchUsageData(token: token) else { return }
             await MainActor.run {
                 self.usage = data
-                self.statusItem.button?.image = renderMenuBarIcon(usage: data)
-                if self.popover.isShown { self.popoverVC.update(usage: data) }
+
+                if data.extraUsageCents > 0 {
+                    let now = Date()
+                    let shouldReset: Bool
+                    if let start = self.extraTrackStart {
+                        shouldReset = !Calendar.current.isDate(start.date, inSameDayAs: now)
+                            || data.extraUsageCents < start.cents
+                    } else {
+                        shouldReset = true
+                    }
+                    if shouldReset {
+                        self.extraTrackStart = (date: now, cents: data.extraUsageCents)
+                    }
+                } else {
+                    self.extraTrackStart = nil
+                }
+
+                let extraDelta = self.extraTrackStart.map { max(0, data.extraUsageCents - $0.cents) } ?? 0
+                self.statusItem.button?.image = renderMenuBarIcon(usage: data, extraDelta: extraDelta)
+                if self.popover.isShown { self.popoverVC.update(usage: data, extraRate: self.currentExtraRate) }
             }
         }
     }
