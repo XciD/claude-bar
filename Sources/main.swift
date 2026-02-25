@@ -1,4 +1,5 @@
 import Cocoa
+import Security
 import ServiceManagement
 
 // MARK: - Data Model
@@ -65,25 +66,29 @@ func formatDrift(_ drift: Double) -> String {
 // MARK: - OAuth Token
 
 func readOAuthToken() -> String? {
-    let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-    task.arguments = ["find-generic-password", "-s", "Claude Code-credentials", "-w"]
-    let pipe = Pipe()
-    task.standardOutput = pipe
-    task.standardError = Pipe()
-    do { try task.run() } catch { return nil }
-    task.waitUntilExit()
-    guard task.terminationStatus == 0 else { return nil }
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: "Claude Code-credentials",
+        kSecReturnData as String: true,
+        kSecMatchLimit as String: kSecMatchLimitOne,
+    ]
+    var item: CFTypeRef?
+    let status = SecItemCopyMatching(query as CFDictionary, &item)
+    guard status == errSecSuccess, let data = item as? Data else { return nil }
     let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-    if let jsonData = raw.data(using: .utf8),
-       let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
        let oauth = json["claudeAiOauth"] as? [String: Any],
        let token = oauth["accessToken"] as? String {
         return token
     }
-    return raw.isEmpty ? nil : raw
+
+    // Fallback: extract accessToken via regex if JSON is truncated (e.g. large MCP OAuth data)
+    if let range = raw.range(of: #""accessToken":"([^"]+)""#, options: .regularExpression),
+       let tokenRange = raw[range].range(of: #"(?<=:")(sk-[^"]+)"#, options: .regularExpression) {
+        return String(raw[tokenRange])
+    }
+    return nil
 }
 
 // MARK: - API
