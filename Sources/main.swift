@@ -65,44 +65,100 @@ func formatDrift(_ drift: Double) -> String {
 
 // MARK: - OAuth Token
 
+func runSecurityCommand() -> [String: Any]? {
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+    proc.arguments = ["find-generic-password", "-s", "Claude Code-credentials", "-w"]
+    let pipe = Pipe()
+    proc.standardOutput = pipe
+    proc.standardError = Pipe()
+    guard (try? proc.run()) != nil else { return nil }
+    proc.waitUntilExit()
+    guard proc.terminationStatus == 0 else { return nil }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let oauth = json["claudeAiOauth"] as? [String: Any] else { return nil }
+    return oauth
+}
+
 func readOAuthToken() -> String? {
-    let query: [String: Any] = [
-        kSecClass as String: kSecClassGenericPassword,
-        kSecAttrService as String: "Claude Code-credentials",
-        kSecReturnData as String: true,
-        kSecMatchLimit as String: kSecMatchLimitOne,
-    ]
-    var item: CFTypeRef?
-    let status = SecItemCopyMatching(query as CFDictionary, &item)
-    guard status == errSecSuccess, let data = item as? Data else { return nil }
-    let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return runSecurityCommand()?["accessToken"] as? String
+}
 
-    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-       let oauth = json["claudeAiOauth"] as? [String: Any],
-       let token = oauth["accessToken"] as? String {
-        return token
-    }
+func isTokenExpired() -> Bool {
+    guard let oauth = runSecurityCommand(),
+          let expiresAt = oauth["expiresAt"] as? Int64 else { return true }
+    return Date().timeIntervalSince1970 * 1000 >= Double(expiresAt)
+}
 
-    // Fallback: extract accessToken via regex if JSON is truncated (e.g. large MCP OAuth data)
-    if let range = raw.range(of: #""accessToken":"([^"]+)""#, options: .regularExpression),
-       let tokenRange = raw[range].range(of: #"(?<=:")(sk-[^"]+)"#, options: .regularExpression) {
-        return String(raw[tokenRange])
+// MARK: - Token Refresh
+
+func writeKeychainOAuth(_ oauth: [String: Any]) {
+    let json: [String: Any] = ["claudeAiOauth": oauth]
+    guard let data = try? JSONSerialization.data(withJSONObject: json),
+          let str = String(data: data, encoding: .utf8) else { return }
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+    proc.arguments = ["add-generic-password", "-U", "-s", "Claude Code-credentials",
+                       "-a", NSUserName(), "-w", str]
+    proc.standardOutput = Pipe()
+    proc.standardError = Pipe()
+    try? proc.run()
+    proc.waitUntilExit()
+}
+
+func refreshOAuthToken() async -> String? {
+    guard let oauth = runSecurityCommand(),
+          let refreshToken = oauth["refreshToken"] as? String else { return nil }
+
+    let clientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    let body = "grant_type=refresh_token&refresh_token=\(refreshToken)&client_id=\(clientId)"
+
+    var request = URLRequest(url: URL(string: "https://platform.claude.com/v1/oauth/token")!)
+    request.httpMethod = "POST"
+    request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+    request.httpBody = body.data(using: .utf8)
+
+    guard let (respData, response) = try? await URLSession.shared.data(for: request),
+          let http = response as? HTTPURLResponse, http.statusCode == 200,
+          let respJson = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
+          let newAccessToken = respJson["access_token"] as? String else { return nil }
+
+    var updated = oauth
+    updated["accessToken"] = newAccessToken
+    if let newRefresh = respJson["refresh_token"] as? String { updated["refreshToken"] = newRefresh }
+    if let expiresIn = respJson["expires_in"] as? Double {
+        updated["expiresAt"] = Int64((Date().timeIntervalSince1970 + expiresIn) * 1000)
     }
-    return nil
+    writeKeychainOAuth(updated)
+
+    return newAccessToken
 }
 
 // MARK: - API
 
-func fetchUsageData(token: String) async -> UsageData? {
+enum FetchResult {
+    case success(UsageData)
+    case needsRefresh
+    case failure
+}
+
+func fetchUsageData(token: String) async -> FetchResult {
     var request = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue("claude-usage-bar/1.0", forHTTPHeaderField: "User-Agent")
 
     guard let (data, response) = try? await URLSession.shared.data(for: request),
-          let http = response as? HTTPURLResponse, http.statusCode == 200,
+          let http = response as? HTTPURLResponse else { return .failure }
+
+    if http.statusCode == 429 || http.statusCode == 401 { return .needsRefresh }
+
+    guard http.statusCode == 200,
           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           json["five_hour"] != nil else {
-        return nil
+        return .failure
     }
 
     let fiveHour = json["five_hour"] as? [String: Any]
@@ -119,13 +175,13 @@ func fetchUsageData(token: String) async -> UsageData? {
         return fmt.date(from: s) ?? fmt2.date(from: s)
     }
 
-    return UsageData(
+    return .success(UsageData(
         fiveHourPct: ((fiveHour?["utilization"] as? Double) ?? 0).rounded(),
         sevenDayPct: ((sevenDay?["utilization"] as? Double) ?? 0).rounded(),
         resetsAt: parseDate(fiveHour?["resets_at"] as? String),
         sevenDayResetsAt: parseDate(sevenDay?["resets_at"] as? String),
         extraUsageCents: (extra?["used_credits"] as? Double) ?? 0
-    )
+    ))
 }
 
 // MARK: - Drawing Helpers
@@ -257,6 +313,24 @@ func renderMenuBarIcon(usage: UsageData?, extraDelta: Double = 0) -> NSImage {
             (extraText as NSString).draw(in: textRect, withAttributes: attrs)
         }
 
+        return true
+    }
+    image.isTemplate = false
+    return image
+}
+
+func renderErrorIcon() -> NSImage {
+    let h: CGFloat = 24
+    let w: CGFloat = 24
+    let image = NSImage(size: NSSize(width: w, height: h), flipped: true) { _ in
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+        let cx = w / 2
+        let cy = h / 2
+        let r: CGFloat = 10
+        ctx.setFillColor(NSColor.systemRed.withAlphaComponent(0.2).cgColor)
+        ctx.addArc(center: CGPoint(x: cx, y: cy), radius: r, startAngle: 0, endAngle: .pi * 2, clockwise: false)
+        ctx.fillPath()
+        drawCenterLabel(cx: cx, cy: cy, text: "!", fontSize: 13, color: .systemRed)
         return true
     }
     image.isTemplate = false
@@ -453,7 +527,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             button.target = self
         }
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             self?.refresh()
         }
     }
@@ -482,8 +556,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refresh() {
         Task {
-            guard let token = readOAuthToken() else { return }
-            guard let data = await fetchUsageData(token: token) else { return }
+            // If token is expired, try to refresh before fetching
+            if isTokenExpired() {
+                let _ = await refreshOAuthToken()
+            }
+            guard var token = readOAuthToken() else { return }
+            var result = await fetchUsageData(token: token)
+            // On 429/401 with expired token, try refresh once
+            if case .needsRefresh = result, isTokenExpired() {
+                if let newToken = await refreshOAuthToken() {
+                    token = newToken
+                    result = await fetchUsageData(token: token)
+                }
+            }
+            guard case .success(let data) = result else {
+                await MainActor.run {
+                    if self.usage == nil {
+                        self.statusItem.button?.image = renderErrorIcon()
+                    }
+                }
+                return
+            }
             await MainActor.run {
                 self.usage = data
 
