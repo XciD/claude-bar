@@ -148,7 +148,7 @@ func fetchUsageData(token: String) async -> FetchResult {
     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue("claude-usage-bar/1.0", forHTTPHeaderField: "User-Agent")
+    request.setValue("claude-code/2.1.66", forHTTPHeaderField: "User-Agent")
 
     guard let (data, response) = try? await URLSession.shared.data(for: request),
           let http = response as? HTTPURLResponse else { return .failure }
