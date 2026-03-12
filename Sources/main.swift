@@ -425,7 +425,13 @@ class PopoverViewController: NSViewController {
         let btnRow = NSStackView(views: [refreshBtn, quitBtn])
         btnRow.orientation = .horizontal; btnRow.spacing = 8
 
-        let mainStack = NSStackView(views: [topRow, sep, extraLabel, loginBtn, btnRow])
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        let versionLabel = NSTextField(labelWithString: version.hasPrefix("v") ? version : "v\(version)")
+        versionLabel.font = .systemFont(ofSize: 9)
+        versionLabel.textColor = .tertiaryLabelColor
+        versionLabel.alignment = .center
+
+        let mainStack = NSStackView(views: [topRow, sep, extraLabel, loginBtn, btnRow, versionLabel])
         mainStack.orientation = .vertical; mainStack.spacing = 10; mainStack.alignment = .centerX
         mainStack.translatesAutoresizingMaskIntoConstraints = false
 
