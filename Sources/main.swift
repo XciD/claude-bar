@@ -63,30 +63,37 @@ func formatDrift(_ drift: Double) -> String {
     drift >= 0 ? "+\(Int(drift))" : "\(Int(drift))"
 }
 
-// MARK: - OAuth Token
+// MARK: - Keychain (Security framework)
 
-func runSecurityCommand() -> [String: Any]? {
-    let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-    proc.arguments = ["find-generic-password", "-s", "Claude Code-credentials", "-w"]
-    let pipe = Pipe()
-    proc.standardOutput = pipe
-    proc.standardError = Pipe()
-    guard (try? proc.run()) != nil else { return nil }
-    proc.waitUntilExit()
-    guard proc.terminationStatus == 0 else { return nil }
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+private let keychainService = "Claude Code-credentials"
+
+func readKeychainOAuth() -> [String: Any]? {
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: keychainService,
+        kSecReturnData as String: true,
+        kSecMatchLimit as String: kSecMatchLimitOne,
+    ]
+    var item: CFTypeRef?
+    let status = SecItemCopyMatching(query as CFDictionary, &item)
+    guard status == errSecSuccess, let data = item as? Data else {
+        NSLog("[ClaudeBar] Keychain read failed: %d", status)
+        return nil
+    }
     guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let oauth = json["claudeAiOauth"] as? [String: Any] else { return nil }
+          let oauth = json["claudeAiOauth"] as? [String: Any] else {
+        NSLog("[ClaudeBar] Keychain data is not valid JSON or missing claudeAiOauth key")
+        return nil
+    }
     return oauth
 }
 
 func readOAuthToken() -> String? {
-    return runSecurityCommand()?["accessToken"] as? String
+    return readKeychainOAuth()?["accessToken"] as? String
 }
 
 func isTokenExpired() -> Bool {
-    guard let oauth = runSecurityCommand(),
+    guard let oauth = readKeychainOAuth(),
           let expiresAt = oauth["expiresAt"] as? Int64 else { return true }
     return Date().timeIntervalSince1970 * 1000 >= Double(expiresAt)
 }
@@ -95,20 +102,29 @@ func isTokenExpired() -> Bool {
 
 func writeKeychainOAuth(_ oauth: [String: Any]) {
     let json: [String: Any] = ["claudeAiOauth": oauth]
-    guard let data = try? JSONSerialization.data(withJSONObject: json),
-          let str = String(data: data, encoding: .utf8) else { return }
-    let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-    proc.arguments = ["add-generic-password", "-U", "-s", "Claude Code-credentials",
-                       "-a", NSUserName(), "-w", str]
-    proc.standardOutput = Pipe()
-    proc.standardError = Pipe()
-    try? proc.run()
-    proc.waitUntilExit()
+    guard let data = try? JSONSerialization.data(withJSONObject: json) else { return }
+
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: keychainService,
+    ]
+    let attrs: [String: Any] = [
+        kSecValueData as String: data,
+        kSecAttrAccount as String: NSUserName(),
+    ]
+    var status = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
+    if status == errSecItemNotFound {
+        var addQuery = query
+        addQuery.merge(attrs) { _, new in new }
+        status = SecItemAdd(addQuery as CFDictionary, nil)
+    }
+    if status != errSecSuccess {
+        NSLog("[ClaudeBar] Keychain write failed: %d", status)
+    }
 }
 
 func refreshOAuthToken() async -> String? {
-    guard let oauth = runSecurityCommand(),
+    guard let oauth = readKeychainOAuth(),
           let refreshToken = oauth["refreshToken"] as? String else { return nil }
 
     let clientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -566,7 +582,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if isTokenExpired() {
                 let _ = await refreshOAuthToken()
             }
-            guard var token = readOAuthToken() else { return }
+            guard var token = readOAuthToken() else {
+                NSLog("[ClaudeBar] No OAuth token found in keychain")
+                await MainActor.run { self.statusItem.button?.image = renderErrorIcon() }
+                return
+            }
             var result = await fetchUsageData(token: token)
             // On 429/401 with expired token, try refresh once
             if case .needsRefresh = result, isTokenExpired() {
