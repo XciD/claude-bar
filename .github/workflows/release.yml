@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: make VERSION=${{ steps.version.outputs.version }}
+
+      - name: Zip
+        run: cd build && zip -r ClaudeUsageBar.zip ClaudeUsageBar.app
+
+      - name: Create GitHub Release
+        run: gh release create "$GITHUB_REF_NAME" build/ClaudeUsageBar.zip --title "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Homebrew tap
+        run: |
+          FORMULA_SHA=$(curl -sL "https://github.com/XciD/claude-bar/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz" | shasum -a 256 | cut -d' ' -f1)
+          CASK_SHA=$(shasum -a 256 build/ClaudeUsageBar.zip | cut -d' ' -f1)
+          VERSION=${{ steps.version.outputs.version }}
+
+          git clone https://x-access-token:${TAP_TOKEN}@github.com/XciD/homebrew-tap.git /tmp/homebrew-tap
+          cd /tmp/homebrew-tap
+
+          sed -i '' "s|url \"https://github.com/XciD/claude-bar/archive/refs/tags/v.*\.tar\.gz\"|url \"https://github.com/XciD/claude-bar/archive/refs/tags/v${VERSION}.tar.gz\"|" Formula/claude-bar.rb
+          sed -i '' "s|sha256 \"[a-f0-9]*\"|sha256 \"${FORMULA_SHA}\"|" Formula/claude-bar.rb
+
+          sed -i '' "s|version \".*\"|version \"${VERSION}\"|" Casks/claude-bar.rb
+          sed -i '' "/^  sha256/s|sha256 \"[a-f0-9]*\"|sha256 \"${CASK_SHA}\"|" Casks/claude-bar.rb
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/claude-bar.rb Casks/claude-bar.rb
+          git commit -m "chore: bump claude-bar to v${VERSION}"
+          git push
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}

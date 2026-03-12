@@ -12,19 +12,19 @@ A lightweight macOS menu bar app that monitors your Claude API usage in real-tim
 - **Popover** with large gauges, drift details, and reset timers
 - **Extra usage** cost displayed when a window reaches 100%
 - Reads OAuth token from macOS Keychain (Claude Code credentials)
-- Auto-refreshes every 60 seconds
+- **Auto-refresh** of OAuth tokens when expired
+- Auto-refreshes every 5 minutes
 
-## Build
+## Install
+
+```
+brew tap xcid/tap
+brew install --cask claude-bar
+```
+
+## Build from source
 
 ```
 make
 open build/ClaudeUsageBar.app
 ```
-
-## Install
-
-```
-make install
-```
-
-Copies the app to `/Applications`.
