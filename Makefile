@@ -14,6 +14,7 @@ $(APP_BUNDLE): $(BINARY) Info.plist AppIcon.icns
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(VERSION)" $(APP_BUNDLE)/Contents/Info.plist
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
 	@cp AppIcon.icns $(APP_BUNDLE)/Contents/Resources/
+	@codesign --force --deep --sign - $(APP_BUNDLE)
 	@echo "Built $(APP_BUNDLE) ($(VERSION))"
 
 $(BINARY): Sources/main.swift
