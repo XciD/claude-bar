@@ -66,8 +66,9 @@ func formatDrift(_ drift: Double) -> String {
 // MARK: - Keychain (Security framework)
 
 private let keychainService = "Claude Code-credentials"
+private var cachedOAuth: [String: Any]?
 
-func readKeychainOAuth() -> [String: Any]? {
+func fetchKeychainOAuth() -> [String: Any]? {
     let query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
         kSecAttrService as String: keychainService,
@@ -86,6 +87,12 @@ func readKeychainOAuth() -> [String: Any]? {
         return nil
     }
     return oauth
+}
+
+func readKeychainOAuth() -> [String: Any]? {
+    if let cached = cachedOAuth { return cached }
+    cachedOAuth = fetchKeychainOAuth()
+    return cachedOAuth
 }
 
 func readOAuthToken() -> String? {
@@ -121,6 +128,7 @@ func writeKeychainOAuth(_ oauth: [String: Any]) {
     if status != errSecSuccess {
         NSLog("[ClaudeBar] Keychain write failed: %d", status)
     }
+    cachedOAuth = oauth
 }
 
 func refreshOAuthToken() async -> String? {
@@ -578,6 +586,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refresh() {
         Task {
+            // Re-read keychain each cycle so we pick up tokens rotated by Claude Code CLI
+            cachedOAuth = nil
+
             // If token is expired, try to refresh before fetching
             if isTokenExpired() {
                 let _ = await refreshOAuthToken()
@@ -588,8 +599,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             var result = await fetchUsageData(token: token)
-            // On 429/401 with expired token, try refresh once
-            if case .needsRefresh = result, isTokenExpired() {
+            // On 429/401, try refreshing the token once
+            if case .needsRefresh = result {
                 if let newToken = await refreshOAuthToken() {
                     token = newToken
                     result = await fetchUsageData(token: token)
